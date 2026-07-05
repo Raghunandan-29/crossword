@@ -150,15 +150,36 @@ export default function GameScreen({ route, navigation }) {
     return cells;
   }, []);
 
-  // Build a set of all playable cell keys for quick lookup
-  const playableCells = useMemo(() => {
-    const set = new Set();
+  // Build a set of all playable cell keys and structural blocks
+  const { playableCells, structuralBlocks } = useMemo(() => {
+    const playable = new Set();
+    const blocks = new Set();
+    
+    // Add all word cells to playable
     words.forEach(w => {
       const cells = getWordCells(w);
-      cells.forEach(c => set.add(`${c.row},${c.col}`));
+      cells.forEach(c => playable.add(`${c.row},${c.col}`));
     });
-    return set;
-  }, [words, getWordCells]);
+    
+    // Identify structural blocks: # cells that are adjacent to playable cells
+    for (let r = 0; r < gridSize; r++) {
+      for (let c = 0; c < gridSize; c++) {
+        if (grid[r]?.[c] === '#' && !playable.has(`${r},${c}`)) {
+          // Check if adjacent to any playable cell
+          const adjacent = [
+            [r-1, c], [r+1, c], [r, c-1], [r, c+1],
+            [r-1, c-1], [r-1, c+1], [r+1, c-1], [r+1, c+1]
+          ];
+          const hasPlayableNeighbor = adjacent.some(([nr, nc]) => playable.has(`${nr},${nc}`));
+          if (hasPlayableNeighbor) {
+            blocks.add(`${r},${c}`);
+          }
+        }
+      }
+    }
+    
+    return { playableCells: playable, structuralBlocks: blocks };
+  }, [words, getWordCells, grid, gridSize]);
 
   // Find a word at a given cell in a specific direction
   const findWordAtCell = useCallback((row, col, dir) => {
@@ -429,8 +450,30 @@ export default function GameScreen({ route, navigation }) {
                 <View key={`r${ri}`} style={styles.gridRow}>
                   {row.map((cell, ci) => {
                     const cellKey = `${ri},${ci}`;
-                    const isBlock = cell === '#';
                     const isPlayable = playableCells.has(cellKey);
+                    const isStructuralBlock = structuralBlocks.has(cellKey);
+                    
+                    // Render structural blocks (true crossword blocks)
+                    if (isStructuralBlock) {
+                      return (
+                        <View
+                          key={`c${ri}-${ci}`}
+                          style={[styles.cell, { width: cellSize, height: cellSize }, styles.cellBlock]}
+                        />
+                      );
+                    }
+                    
+                    // Render padding/empty cells as invisible
+                    if (!isPlayable) {
+                      return (
+                        <View
+                          key={`c${ri}-${ci}`}
+                          style={[styles.cell, { width: cellSize, height: cellSize }, styles.cellInvisible]}
+                        />
+                      );
+                    }
+
+                    // Playable cell
                     const isSelected = selectedCell?.row === ri && selectedCell?.col === ci;
                     const isHighlighted = highlightedCells.has(cellKey);
                     const num = numberMap[cellKey];
@@ -438,26 +481,23 @@ export default function GameScreen({ route, navigation }) {
                     const cellState = correctCells[cellKey];
 
                     // Determine cell background style
-                    let cellBg = styles.cellBlock;
-                    if (!isBlock && isPlayable) {
-                      cellBg = styles.cellEmpty;
-                      if (isHighlighted) cellBg = styles.cellHighlighted;
-                      if (isSelected) cellBg = styles.cellSelected;
-                      if (cellState === 'correct') cellBg = styles.cellCorrect;
-                      if (cellState === 'incorrect') cellBg = styles.cellIncorrect;
-                    }
+                    let cellBg = styles.cellEmpty;
+                    if (isHighlighted) cellBg = styles.cellHighlighted;
+                    if (isSelected) cellBg = styles.cellSelected;
+                    if (cellState === 'correct') cellBg = styles.cellCorrect;
+                    if (cellState === 'incorrect') cellBg = styles.cellIncorrect;
 
                     return (
                       <TouchableOpacity
                         key={`c${ri}-${ci}`}
                         onPress={() => handleCellPress(ri, ci)}
-                        activeOpacity={isBlock ? 1 : 0.7}
+                        activeOpacity={0.7}
                         style={[styles.cell, { width: cellSize, height: cellSize }, cellBg]}
                       >
-                        {isPlayable && num ? (
+                        {num ? (
                           <Text style={[styles.cellNumber, { fontSize: Math.max(7, cellSize * 0.2) }]}>{num}</Text>
                         ) : null}
-                        {isPlayable && value ? (
+                        {value ? (
                           <Text style={[
                             styles.cellLetter,
                             { fontSize: Math.max(12, cellSize * 0.45) },
@@ -593,14 +633,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
   },
   gridOuter: {
-    backgroundColor: '#1a1a2e',
-    padding: 2,
+    backgroundColor: 'transparent',
+    padding: 0,
     borderRadius: radius.sm,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 12,
-    elevation: 8,
   },
   gridRow: { flexDirection: 'row' },
   cell: {
@@ -611,6 +646,9 @@ const styles = StyleSheet.create({
   },
   cellBlock: {
     backgroundColor: '#1a1a2e',
+  },
+  cellInvisible: {
+    backgroundColor: 'transparent',
   },
   cellEmpty: {
     backgroundColor: '#FFFFFF',

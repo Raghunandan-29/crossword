@@ -144,20 +144,37 @@ class CrosswordEngine {
         for (let r = 0; r < this.gridSize; r++) {
           for (let c = 0; c < this.gridSize; c++) {
             if (this.canPlace(word, r, c, direction)) {
-              // Score based on intersection count and centrality
+              // Score based on intersection count and proximity to existing words
               let score = 0;
               const len = word.length;
+              
+              // High score for intersections
               for (let i = 0; i < len; i++) {
                 const cr = direction === 'across' ? r : r + i;
                 const cc = direction === 'across' ? c + i : c;
-                if (this.grid[cr][cc] !== EMPTY) score += 10;
+                if (this.grid[cr][cc] !== EMPTY) score += 100;
               }
-              // Prefer positions closer to center
+              
+              // If no intersections, prefer positions near existing words
+              if (score === 0 && this.placedWords.length > 0) {
+                let minDist = Infinity;
+                for (const pw of this.placedWords) {
+                  const pwMidR = pw.direction === 'across' ? pw.row : pw.row + pw.word.length / 2;
+                  const pwMidC = pw.direction === 'across' ? pw.col + pw.word.length / 2 : pw.col;
+                  const midR = direction === 'across' ? r : r + len / 2;
+                  const midC = direction === 'across' ? c + len / 2 : c;
+                  const dist = Math.abs(midR - pwMidR) + Math.abs(midC - pwMidC);
+                  minDist = Math.min(minDist, dist);
+                }
+                score = 1000 - minDist; // Closer = higher score
+              }
+              
+              // Slight preference for center (tiebreaker)
               const centerR = this.gridSize / 2;
               const centerC = this.gridSize / 2;
               const midR = direction === 'across' ? r : r + len / 2;
               const midC = direction === 'across' ? c + len / 2 : c;
-              score -= Math.abs(midR - centerR) + Math.abs(midC - centerC);
+              score -= (Math.abs(midR - centerR) + Math.abs(midC - centerC)) * 0.1;
 
               if (score > bestScore) {
                 bestScore = score;
