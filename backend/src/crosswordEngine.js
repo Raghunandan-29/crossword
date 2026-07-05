@@ -32,12 +32,10 @@ class CrosswordEngine {
       // Check cell after word
       if (col + len < this.gridSize && this.grid[row][col + len] !== EMPTY && this.grid[row][col + len] !== BLOCK) return false;
 
-      let hasIntersection = false;
       for (let i = 0; i < len; i++) {
         const cell = this.grid[row][col + i];
         if (cell !== EMPTY) {
           if (cell !== word[i]) return false;
-          hasIntersection = true;
         } else {
           // Check cells above and below for non-intersection
           if (row > 0 && this.grid[row - 1][col + i] !== EMPTY && this.grid[row - 1][col + i] !== BLOCK) return false;
@@ -45,7 +43,7 @@ class CrosswordEngine {
         }
       }
 
-      return this.placedWords.length === 0 || hasIntersection;
+      return true;
     } else {
       if (row + len > this.gridSize) return false;
       // Check cell before word
@@ -53,12 +51,10 @@ class CrosswordEngine {
       // Check cell after word
       if (row + len < this.gridSize && this.grid[row + len][col] !== EMPTY && this.grid[row + len][col] !== BLOCK) return false;
 
-      let hasIntersection = false;
       for (let i = 0; i < len; i++) {
         const cell = this.grid[row + i][col];
         if (cell !== EMPTY) {
           if (cell !== word[i]) return false;
-          hasIntersection = true;
         } else {
           // Check cells left and right for non-intersection
           if (col > 0 && this.grid[row + i][col - 1] !== EMPTY && this.grid[row + i][col - 1] !== BLOCK) return false;
@@ -66,7 +62,7 @@ class CrosswordEngine {
         }
       }
 
-      return this.placedWords.length === 0 || hasIntersection;
+      return true;
     }
   }
 

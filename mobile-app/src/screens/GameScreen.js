@@ -1,14 +1,36 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
-  Dimensions, Alert, Animated, TextInput, KeyboardAvoidingView, Platform
+  Dimensions, Alert, TextInput, KeyboardAvoidingView, Platform,
+  ActivityIndicator
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, fonts, spacing, radius } from '../theme';
-import { getPuzzleForPlay, checkPuzzle, completePuzzle, saveProgress } from '../api';
+import { getPuzzleForPlay, checkPuzzle, completePuzzle } from '../api';
 import { getOrCreatePlayer, updateStoredPlayer } from '../store';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const SCREEN_WIDTH = Dimensions.get('window').width;
+
+function parseGridData(raw) {
+  if (!raw) return null;
+  if (typeof raw === 'string') {
+    try { return JSON.parse(raw); } catch { return null; }
+  }
+  return raw;
+}
+
+function buildGridFromWords(words, gridSize) {
+  const size = gridSize || 15;
+  const grid = Array.from({ length: size }, () => Array(size).fill('#'));
+  words.forEach(w => {
+    for (let i = 0; i < (w.length || 0); i++) {
+      const r = w.direction === 'across' ? w.row : w.row + i;
+      const c = w.direction === 'across' ? w.col + i : w.col;
+      if (r < size && c < size) grid[r][c] = '.';
+    }
+  });
+  return grid;
+}
 
 export default function GameScreen({ route, navigation }) {
   const { puzzleId, title } = route.params;
@@ -26,8 +48,6 @@ export default function GameScreen({ route, navigation }) {
   const [correctCells, setCorrectCells] = useState({});
   const [score, setScore] = useState(0);
   const inputRef = useRef(null);
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const scaleAnim = useRef(new Animated.Value(0.8)).current;
   const timerRef = useRef(null);
   const timeSpentRef = useRef(null);
 
@@ -49,24 +69,17 @@ export default function GameScreen({ route, navigation }) {
         setTimerActive(true);
       }
 
-      // Start time tracker
       timeSpentRef.current = setInterval(() => {
         setTimeSpent(prev => prev + 1);
       }, 1000);
-
-      Animated.parallel([
-        Animated.timing(fadeAnim, { toValue: 1, duration: 500, useNativeDriver: true }),
-        Animated.spring(scaleAnim, { toValue: 1, friction: 8, useNativeDriver: true }),
-      ]).start();
     } catch (error) {
-      Alert.alert('Error', 'Failed to load puzzle');
+      Alert.alert('Error', 'Failed to load puzzle. Please try again.');
       navigation.goBack();
     } finally {
       setLoading(false);
     }
   };
 
-  // Timer countdown
   useEffect(() => {
     if (timerActive && !completed) {
       timerRef.current = setInterval(() => {
@@ -90,23 +103,44 @@ export default function GameScreen({ route, navigation }) {
     ]);
   };
 
-  const gridData = puzzle?.grid_data;
-  const grid = gridData?.solution || [];
+  // --- Derive grid & words from puzzle ---
   const words = puzzle?.words || [];
+  const parsedGridData = parseGridData(puzzle?.grid_data);
+  const solutionGrid = parsedGridData?.solution || [];
+  const grid = solutionGrid.length > 0
+    ? solutionGrid
+    : (words.length > 0 ? buildGridFromWords(words, puzzle?.grid_size) : []);
   const gridSize = grid.length;
-  const cellSize = Math.min(Math.floor((SCREEN_WIDTH - 40) / gridSize), 36);
+
+  // A cell is a block if it's '#'
+  const isBlockCell = useCallback((r, c) => {
+    if (r < 0 || r >= gridSize || c < 0 || c >= gridSize) return true;
+    return grid[r]?.[c] === '#';
+  }, [grid, gridSize]);
+
+  // Responsive cell sizing
+  const cellSize = useMemo(() => {
+    if (gridSize <= 0) return 35;
+    const maxGridWidth = SCREEN_WIDTH - 24;
+    return Math.floor(maxGridWidth / gridSize);
+  }, [gridSize]);
 
   // Build number map
-  const numberMap = {};
-  words.forEach(w => {
-    const key = `${w.row},${w.col}`;
-    if (!numberMap[key]) numberMap[key] = w.number;
-  });
+  const numberMap = useMemo(() => {
+    const map = {};
+    words.forEach(w => {
+      const key = `${w.row},${w.col}`;
+      if (!map[key]) map[key] = w.number;
+    });
+    return map;
+  }, [words]);
 
-  // Build word cell map
+  // Get cells for a word
   const getWordCells = useCallback((word) => {
+    if (!word) return [];
     const cells = [];
-    for (let i = 0; i < word.length; i++) {
+    const len = word.length || 0;
+    for (let i = 0; i < len; i++) {
       if (word.direction === 'across') {
         cells.push({ row: word.row, col: word.col + i });
       } else {
@@ -116,6 +150,17 @@ export default function GameScreen({ route, navigation }) {
     return cells;
   }, []);
 
+  // Build a set of all playable cell keys for quick lookup
+  const playableCells = useMemo(() => {
+    const set = new Set();
+    words.forEach(w => {
+      const cells = getWordCells(w);
+      cells.forEach(c => set.add(`${c.row},${c.col}`));
+    });
+    return set;
+  }, [words, getWordCells]);
+
+  // Find a word at a given cell in a specific direction
   const findWordAtCell = useCallback((row, col, dir) => {
     return words.find(w => {
       if (w.direction !== dir) return false;
@@ -124,84 +169,107 @@ export default function GameScreen({ route, navigation }) {
     });
   }, [words, getWordCells]);
 
+  // Find ALL words at a cell (could be both across and down at an intersection)
+  const findAllWordsAtCell = useCallback((row, col) => {
+    return words.filter(w => {
+      const cells = getWordCells(w);
+      return cells.some(c => c.row === row && c.col === col);
+    });
+  }, [words, getWordCells]);
+
   const handleCellPress = (row, col) => {
-    if (grid[row]?.[col] === '#') return;
+    if (isBlockCell(row, col)) return;
+    // Check if cell is part of any word
+    if (!playableCells.has(`${row},${col}`)) return;
+
+    const wordsAtCell = findAllWordsAtCell(row, col);
+    if (wordsAtCell.length === 0) return;
 
     if (selectedCell?.row === row && selectedCell?.col === col) {
-      const newDir = direction === 'across' ? 'down' : 'across';
-      setDirection(newDir);
-      const word = findWordAtCell(row, col, newDir) || findWordAtCell(row, col, direction);
-      setSelectedWord(word);
+      // Same cell tapped again → toggle direction
+      const otherDir = direction === 'across' ? 'down' : 'across';
+      const otherWord = wordsAtCell.find(w => w.direction === otherDir);
+      if (otherWord) {
+        setDirection(otherDir);
+        setSelectedWord(otherWord);
+      }
     } else {
+      // New cell tapped
       setSelectedCell({ row, col });
-      const word = findWordAtCell(row, col, direction) || findWordAtCell(row, col, direction === 'across' ? 'down' : 'across');
+
+      // Prefer current direction, fallback to whatever word is there
+      const sameDir = wordsAtCell.find(w => w.direction === direction);
+      const word = sameDir || wordsAtCell[0];
       if (word) {
         setDirection(word.direction);
         setSelectedWord(word);
       }
     }
 
-    if (inputRef.current) {
-      inputRef.current.focus();
-    }
+    // Open keyboard
+    setTimeout(() => {
+      if (inputRef.current) inputRef.current.focus();
+    }, 50);
   };
 
-  const handleKeyPress = (key) => {
+  // --- Typing ---
+  const handleLetterInput = useCallback((char) => {
     if (!selectedCell || completed) return;
+    const { row, col } = selectedCell;
+    setCellValues(prev => ({ ...prev, [`${row},${col}`]: char.toUpperCase() }));
 
+    // Auto-advance to next cell in the current word
+    if (selectedWord) {
+      const cells = getWordCells(selectedWord);
+      const idx = cells.findIndex(c => c.row === row && c.col === col);
+      if (idx >= 0 && idx < cells.length - 1) {
+        setSelectedCell(cells[idx + 1]);
+      }
+    }
+  }, [selectedCell, selectedWord, completed, getWordCells]);
+
+  const handleBackspace = useCallback(() => {
+    if (!selectedCell || completed) return;
     const { row, col } = selectedCell;
     const cellKey = `${row},${col}`;
 
-    if (key === 'BACKSPACE') {
+    if (cellValues[cellKey]) {
+      // Clear current cell
       setCellValues(prev => {
         const updated = { ...prev };
         delete updated[cellKey];
         return updated;
       });
-      moveToPrevCell();
-      return;
+    } else {
+      // Move back and clear previous cell
+      if (selectedWord) {
+        const cells = getWordCells(selectedWord);
+        const idx = cells.findIndex(c => c.row === row && c.col === col);
+        if (idx > 0) {
+          const prevCell = cells[idx - 1];
+          setSelectedCell(prevCell);
+          setCellValues(prev => {
+            const updated = { ...prev };
+            delete updated[`${prevCell.row},${prevCell.col}`];
+            return updated;
+          });
+        }
+      }
     }
-
-    if (/^[A-Za-z]$/.test(key)) {
-      setCellValues(prev => ({ ...prev, [cellKey]: key.toUpperCase() }));
-      moveToNextCell();
-    }
-  };
-
-  const moveToNextCell = () => {
-    if (!selectedCell || !selectedWord) return;
-    const cells = getWordCells(selectedWord);
-    const idx = cells.findIndex(c => c.row === selectedCell.row && c.col === selectedCell.col);
-    if (idx < cells.length - 1) {
-      setSelectedCell(cells[idx + 1]);
-    }
-  };
-
-  const moveToPrevCell = () => {
-    if (!selectedCell || !selectedWord) return;
-    const cells = getWordCells(selectedWord);
-    const idx = cells.findIndex(c => c.row === selectedCell.row && c.col === selectedCell.col);
-    if (idx > 0) {
-      setSelectedCell(cells[idx - 1]);
-    }
-  };
+  }, [selectedCell, selectedWord, completed, cellValues, getWordCells]);
 
   const handleCheckPuzzle = async () => {
     try {
-      // Build answers from cellValues mapped to word IDs
       const answers = {};
       words.forEach(w => {
         const cells = getWordCells(w);
         let answer = '';
-        cells.forEach(c => {
-          answer += cellValues[`${c.row},${c.col}`] || ' ';
-        });
+        cells.forEach(c => { answer += cellValues[`${c.row},${c.col}`] || ' '; });
         answers[w.id] = answer;
       });
 
       const res = await checkPuzzle(puzzleId, answers);
 
-      // Mark correct/incorrect cells
       const newCorrectCells = {};
       words.forEach(w => {
         const isCorrect = res.data.results[w.id];
@@ -215,11 +283,7 @@ export default function GameScreen({ route, navigation }) {
       if (res.data.allCorrect) {
         handlePuzzleComplete();
       } else {
-        Alert.alert(
-          'Keep Going!',
-          `${res.data.correctCount}/${res.data.totalWords} words correct. Keep trying!`
-        );
-        // Clear incorrect states after 2s
+        Alert.alert('Keep Going!', `${res.data.correctCount}/${res.data.totalWords} words correct. Keep trying!`);
         setTimeout(() => setCorrectCells({}), 2000);
       }
     } catch (error) {
@@ -252,22 +316,25 @@ export default function GameScreen({ route, navigation }) {
     return `${m}:${s.toString().padStart(2, '0')}`;
   };
 
-  const isHighlightedCell = (row, col) => {
-    if (!selectedWord) return false;
-    const cells = getWordCells(selectedWord);
-    return cells.some(c => c.row === row && c.col === col);
-  };
+  // Check if cell is part of the currently selected word
+  const highlightedCells = useMemo(() => {
+    if (!selectedWord) return new Set();
+    const set = new Set();
+    getWordCells(selectedWord).forEach(c => set.add(`${c.row},${c.col}`));
+    return set;
+  }, [selectedWord, getWordCells]);
 
+  // --- Render: Loading ---
   if (loading) {
     return (
       <View style={styles.loader}>
-        <Animated.View style={{ opacity: fadeAnim }}>
-          <Text style={styles.loadingText}>Loading puzzle...</Text>
-        </Animated.View>
+        <ActivityIndicator size="large" color={colors.primary} />
+        <Text style={styles.loadingText}>Loading puzzle...</Text>
       </View>
     );
   }
 
+  // --- Render: Completed ---
   if (completed) {
     return (
       <View style={styles.completionContainer}>
@@ -301,28 +368,34 @@ export default function GameScreen({ route, navigation }) {
     );
   }
 
+  // --- Render: Game ---
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      {/* Hidden input for keyboard */}
       <TextInput
         ref={inputRef}
         style={styles.hiddenInput}
         autoCapitalize="characters"
         autoCorrect={false}
         autoComplete="off"
-        onKeyPress={({ nativeEvent }) => {
-          if (nativeEvent.key === 'Backspace') {
-            handleKeyPress('BACKSPACE');
-          }
-        }}
+        contextMenuHidden={true}
+        selectTextOnFocus={false}
         onChangeText={(text) => {
           if (text.length > 0) {
-            handleKeyPress(text[text.length - 1]);
+            const char = text[text.length - 1];
+            if (/^[A-Za-z]$/.test(char)) {
+              handleLetterInput(char);
+            }
           }
+          // Clear input after processing
+          requestAnimationFrame(() => {
+            if (inputRef.current) inputRef.current.clear();
+          });
         }}
-        value=""
-        caretHidden
+        onKeyPress={({ nativeEvent }) => {
+          if (nativeEvent.key === 'Backspace') handleBackspace();
+        }}
         blurOnSubmit={false}
+        caretHidden
       />
 
       {/* Top bar */}
@@ -332,7 +405,7 @@ export default function GameScreen({ route, navigation }) {
         </TouchableOpacity>
         <View style={styles.topCenter}>
           <Text style={styles.puzzleTitle} numberOfLines={1}>{title}</Text>
-          {puzzle.timer_mode === 1 && (
+          {puzzle?.timer_mode === 1 && (
             <View style={[styles.timerBadge, timeRemaining < 30 && { backgroundColor: colors.difficultyHighBg }]}>
               <Ionicons name="timer-outline" size={14} color={timeRemaining < 30 ? colors.error : colors.primary} />
               <Text style={[styles.timerText, timeRemaining < 30 && { color: colors.error }]}>
@@ -347,48 +420,64 @@ export default function GameScreen({ route, navigation }) {
       </View>
 
       <ScrollView style={styles.scrollArea} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        {/* Grid */}
-        <Animated.View style={[styles.gridContainer, { opacity: fadeAnim, transform: [{ scale: scaleAnim }] }]}>
-          <View style={[styles.gridBorder]}>
-            {grid.map((row, ri) => (
-              <View key={ri} style={styles.gridRow}>
-                {row.map((cell, ci) => {
-                  const isBlock = cell === '#';
-                  const isSelected = selectedCell?.row === ri && selectedCell?.col === ci;
-                  const isHighlighted = isHighlightedCell(ri, ci);
-                  const num = numberMap[`${ri},${ci}`];
-                  const value = cellValues[`${ri},${ci}`] || '';
-                  const cellState = correctCells[`${ri},${ci}`];
 
-                  return (
-                    <TouchableOpacity
-                      key={ci}
-                      onPress={() => handleCellPress(ri, ci)}
-                      activeOpacity={isBlock ? 1 : 0.7}
-                      style={[
-                        styles.cell,
-                        { width: cellSize, height: cellSize },
-                        isBlock && styles.cellBlock,
-                        !isBlock && styles.cellEmpty,
-                        isHighlighted && styles.cellHighlighted,
-                        isSelected && styles.cellSelected,
-                        cellState === 'correct' && styles.cellCorrect,
-                        cellState === 'incorrect' && styles.cellIncorrect,
-                      ]}
-                    >
-                      {!isBlock && num && (
-                        <Text style={[styles.cellNumber, { fontSize: cellSize * 0.22 }]}>{num}</Text>
-                      )}
-                      {!isBlock && value ? (
-                        <Text style={[styles.cellLetter, { fontSize: cellSize * 0.45 }]}>{value}</Text>
-                      ) : null}
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            ))}
-          </View>
-        </Animated.View>
+        {/* ===== CROSSWORD GRID ===== */}
+        <View style={styles.gridContainer}>
+          {gridSize > 0 ? (
+            <View style={styles.gridOuter}>
+              {grid.map((row, ri) => (
+                <View key={`r${ri}`} style={styles.gridRow}>
+                  {row.map((cell, ci) => {
+                    const cellKey = `${ri},${ci}`;
+                    const isBlock = cell === '#';
+                    const isPlayable = playableCells.has(cellKey);
+                    const isSelected = selectedCell?.row === ri && selectedCell?.col === ci;
+                    const isHighlighted = highlightedCells.has(cellKey);
+                    const num = numberMap[cellKey];
+                    const value = cellValues[cellKey] || '';
+                    const cellState = correctCells[cellKey];
+
+                    // Determine cell background style
+                    let cellBg = styles.cellBlock;
+                    if (!isBlock && isPlayable) {
+                      cellBg = styles.cellEmpty;
+                      if (isHighlighted) cellBg = styles.cellHighlighted;
+                      if (isSelected) cellBg = styles.cellSelected;
+                      if (cellState === 'correct') cellBg = styles.cellCorrect;
+                      if (cellState === 'incorrect') cellBg = styles.cellIncorrect;
+                    }
+
+                    return (
+                      <TouchableOpacity
+                        key={`c${ri}-${ci}`}
+                        onPress={() => handleCellPress(ri, ci)}
+                        activeOpacity={isBlock ? 1 : 0.7}
+                        style={[styles.cell, { width: cellSize, height: cellSize }, cellBg]}
+                      >
+                        {isPlayable && num ? (
+                          <Text style={[styles.cellNumber, { fontSize: Math.max(7, cellSize * 0.2) }]}>{num}</Text>
+                        ) : null}
+                        {isPlayable && value ? (
+                          <Text style={[
+                            styles.cellLetter,
+                            { fontSize: Math.max(12, cellSize * 0.45) },
+                            isSelected && styles.cellLetterSelected,
+                          ]}>{value}</Text>
+                        ) : null}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              ))}
+            </View>
+          ) : (
+            <View style={styles.noGrid}>
+              <Ionicons name="alert-circle-outline" size={32} color={colors.error} />
+              <Text style={styles.noGridText}>Could not load crossword grid</Text>
+              <Text style={styles.noGridSubtext}>Go back and try again</Text>
+            </View>
+          )}
+        </View>
 
         {/* Current clue */}
         {selectedWord && (
@@ -409,7 +498,6 @@ export default function GameScreen({ route, navigation }) {
 
         {showClues && (
           <View style={styles.allClues}>
-            {/* Across */}
             <View style={styles.clueSection}>
               <Text style={styles.clueSectionTitle}>Across</Text>
               {words.filter(w => w.direction === 'across').sort((a, b) => a.number - b.number).map(w => (
@@ -429,7 +517,6 @@ export default function GameScreen({ route, navigation }) {
               ))}
             </View>
 
-            {/* Down */}
             <View style={styles.clueSection}>
               <Text style={styles.clueSectionTitle}>Down</Text>
               {words.filter(w => w.direction === 'down').sort((a, b) => a.number - b.number).map(w => (
@@ -459,7 +546,7 @@ export default function GameScreen({ route, navigation }) {
           </View>
           <View style={styles.infoPill}>
             <Ionicons name="star-outline" size={14} color={colors.accent} />
-            <Text style={styles.infoText}>{puzzle.points} pts</Text>
+            <Text style={styles.infoText}>{puzzle?.points || 0} pts</Text>
           </View>
           <View style={styles.infoPill}>
             <Ionicons name="grid-outline" size={14} color={colors.textSecondary} />
@@ -473,8 +560,11 @@ export default function GameScreen({ route, navigation }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  loader: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.background },
-  loadingText: { fontSize: 16, color: colors.textSecondary, ...fonts.medium },
+  loader: {
+    flex: 1, justifyContent: 'center', alignItems: 'center',
+    backgroundColor: colors.background, padding: spacing.xl,
+  },
+  loadingText: { fontSize: 16, color: colors.textSecondary, ...fonts.medium, marginTop: spacing.lg },
   hiddenInput: { position: 'absolute', top: -100, left: -100, width: 1, height: 1, opacity: 0 },
 
   topBar: {
@@ -496,29 +586,77 @@ const styles = StyleSheet.create({
   scrollArea: { flex: 1 },
   scrollContent: { paddingBottom: 40 },
 
-  gridContainer: { alignItems: 'center', paddingVertical: spacing.xl },
-  gridBorder: {
-    backgroundColor: colors.cellBlock, padding: 2, borderRadius: radius.sm,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1, shadowRadius: 12, elevation: 4,
+  // Grid
+  gridContainer: {
+    alignItems: 'center',
+    paddingVertical: spacing.lg,
+    paddingHorizontal: 8,
+  },
+  gridOuter: {
+    backgroundColor: '#1a1a2e',
+    padding: 2,
+    borderRadius: radius.sm,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
+    elevation: 8,
   },
   gridRow: { flexDirection: 'row' },
   cell: {
-    justifyContent: 'center', alignItems: 'center',
-    margin: 0.5, position: 'relative',
+    justifyContent: 'center',
+    alignItems: 'center',
+    margin: 0.5,
+    position: 'relative',
   },
-  cellBlock: { backgroundColor: colors.cellBlock },
-  cellEmpty: { backgroundColor: colors.surface },
-  cellHighlighted: { backgroundColor: colors.cellHighlight },
-  cellSelected: { backgroundColor: colors.primary, borderWidth: 0 },
-  cellCorrect: { backgroundColor: colors.cellCorrect },
-  cellIncorrect: { backgroundColor: colors.cellIncorrect },
+  cellBlock: {
+    backgroundColor: '#1a1a2e',
+  },
+  cellEmpty: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 0.5,
+    borderColor: '#BBBBBB',
+  },
+  cellHighlighted: {
+    backgroundColor: '#c5d5ff',
+    borderWidth: 0.5,
+    borderColor: '#8fa8e8',
+  },
+  cellSelected: {
+    backgroundColor: '#4263eb',
+    borderWidth: 0,
+  },
+  cellCorrect: {
+    backgroundColor: '#b2f2bb',
+    borderWidth: 0.5,
+    borderColor: '#40c057',
+  },
+  cellIncorrect: {
+    backgroundColor: '#ffc9c9',
+    borderWidth: 0.5,
+    borderColor: '#fa5252',
+  },
   cellNumber: {
     position: 'absolute', top: 1, left: 2,
-    color: colors.textSecondary, ...fonts.medium,
+    color: '#666666', ...fonts.bold,
   },
-  cellLetter: { color: colors.text, ...fonts.bold, textAlign: 'center' },
+  cellLetter: {
+    color: '#1a1a2e', ...fonts.bold, textAlign: 'center',
+  },
+  cellLetterSelected: {
+    color: '#FFFFFF',
+  },
+  noGrid: {
+    alignItems: 'center', padding: spacing.xxxl,
+  },
+  noGridText: {
+    fontSize: 16, color: colors.error, ...fonts.semibold, marginTop: spacing.md,
+  },
+  noGridSubtext: {
+    fontSize: 13, color: colors.textSecondary, marginTop: spacing.sm, textAlign: 'center',
+  },
 
+  // Clues
   currentClue: {
     marginHorizontal: spacing.xl, marginTop: spacing.md,
     backgroundColor: colors.surface, borderRadius: radius.lg,
@@ -548,6 +686,7 @@ const styles = StyleSheet.create({
   clueItemNumber: { fontSize: 14, color: colors.primary, ...fonts.bold, width: 28 },
   clueItemText: { flex: 1, fontSize: 14, color: colors.textSecondary, ...fonts.regular, lineHeight: 20 },
 
+  // Info
   infoBar: {
     flexDirection: 'row', justifyContent: 'center', gap: spacing.lg,
     paddingVertical: spacing.lg, marginHorizontal: spacing.xl,
