@@ -1,0 +1,27 @@
+{
+  "expo": {
+    "name": "Crossword Puzzle",
+    "slug": "crossword-puzzle",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "backgroundColor": "#4263eb"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.crossword.puzzle"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#4263eb"
+      },
+      "package": "com.crossword.puzzle"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}

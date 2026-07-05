@@ -1,0 +1,27 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+body {
+  @apply bg-gray-50 text-gray-900 antialiased;
+}
+
+.crossword-cell {
+  @apply w-8 h-8 border border-gray-300 flex items-center justify-center text-xs font-bold uppercase;
+}
+
+.crossword-cell.filled {
+  @apply bg-white;
+}
+
+.crossword-cell.blocked {
+  @apply bg-gray-900;
+}
+
+.crossword-cell .cell-number {
+  @apply absolute top-0 left-0.5 text-[8px] font-medium text-gray-500;
+}
