@@ -4,12 +4,14 @@
     "slug": "crossword-puzzle",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "splash": {
-      "backgroundColor": "#4263eb"
+      "backgroundColor": "#4263eb",
+      "resizeMode": "contain"
     },
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.crossword.puzzle"
@@ -20,8 +22,13 @@
       },
       "package": "com.crossword.puzzle"
     },
-    "web": {
-      "favicon": "./assets/favicon.png"
-    }
+    "extra": {
+      "eas": {
+        "projectId": "99a7c8d0-386a-4613-8d49-a3ca5cc8ffa8"
+      }
+    },
+    "plugins": [
+      "expo-font"
+    ]
   }
 }

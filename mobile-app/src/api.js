@@ -1,12 +1,12 @@
 import axios from 'axios';
 
 // Change this to your server IP when testing on a physical device
-const API_BASE = 'http://localhost:3001/api';
-const WS_URL = 'ws://localhost:3001/ws';
+const API_BASE = 'https://crossword-backend-aqfx.onrender.com/api';
+// const WS_URL = 'ws://localhost:3001/ws';
 
 const api = axios.create({
   baseURL: API_BASE,
-  timeout: 10000,
+  timeout: 60000, // 60 seconds for Render cold start
 });
 
 // Puzzles
@@ -41,44 +41,11 @@ export const getPlayerProgress = (playerId) =>
 export const getLeaderboard = () =>
   api.get('/players/leaderboard/top');
 
-// WebSocket
+// WebSocket - disabled for now (Render doesn't support WebSocket easily)
 export function connectWebSocket(onMessage) {
-  let ws = null;
-  let reconnectTimeout = null;
-
-  function connect() {
-    ws = new WebSocket(WS_URL);
-
-    ws.onopen = () => {
-      console.log('WebSocket connected');
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        onMessage(data);
-      } catch (e) {
-        console.error('WS parse error:', e);
-      }
-    };
-
-    ws.onclose = () => {
-      console.log('WebSocket disconnected, reconnecting...');
-      reconnectTimeout = setTimeout(connect, 3000);
-    };
-
-    ws.onerror = (error) => {
-      console.error('WebSocket error:', error);
-      ws.close();
-    };
-  }
-
-  connect();
-
-  return () => {
-    if (reconnectTimeout) clearTimeout(reconnectTimeout);
-    if (ws) ws.close();
-  };
+  // Return a no-op disconnect function
+  console.log('WebSocket disabled - using polling instead');
+  return () => {};
 }
 
 export default api;

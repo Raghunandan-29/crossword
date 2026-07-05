@@ -20,9 +20,11 @@ export default function HomeScreen({ navigation }) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState('all');
+  const [error, setError] = useState(null);
 
   const fetchPuzzles = useCallback(async () => {
     try {
+      setError(null);
       const params = {};
       if (filter !== 'all' && filter !== 'timer') {
         params.difficulty = filter;
@@ -31,9 +33,11 @@ export default function HomeScreen({ navigation }) {
         params.timer_mode = 'true';
       }
       const res = await getPublishedPuzzles(params);
-      setPuzzles(res.data);
+      setPuzzles(res.data || []);
     } catch (error) {
       console.error('Error fetching puzzles:', error);
+      setError('Unable to load puzzles. Please check your internet connection and try again.');
+      setPuzzles([]);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -111,6 +115,8 @@ export default function HomeScreen({ navigation }) {
     return (
       <View style={styles.loader}>
         <ActivityIndicator size="large" color={colors.primary} />
+        <Text style={styles.loadingText}>Loading puzzles...</Text>
+        <Text style={styles.loadingSubtext}>This may take up to 30 seconds on first load</Text>
       </View>
     );
   }
@@ -146,6 +152,14 @@ export default function HomeScreen({ navigation }) {
         ))}
       </View>
 
+      {/* Error Message */}
+      {error && (
+        <View style={styles.errorBanner}>
+          <Ionicons name="alert-circle-outline" size={20} color={colors.error} />
+          <Text style={styles.errorText}>{error}</Text>
+        </View>
+      )}
+
       {/* Puzzle list */}
       <FlatList
         data={puzzles}
@@ -168,7 +182,16 @@ export default function HomeScreen({ navigation }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  loader: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.background },
+  loader: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.background, padding: spacing.xl },
+  loadingText: { fontSize: 16, color: colors.text, ...fonts.semibold, marginTop: spacing.lg },
+  loadingSubtext: { fontSize: 13, color: colors.textSecondary, marginTop: spacing.sm, textAlign: 'center' },
+  errorBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+    backgroundColor: colors.cellIncorrect, padding: spacing.md,
+    marginHorizontal: spacing.xl, marginBottom: spacing.md,
+    borderRadius: radius.md, borderLeftWidth: 3, borderLeftColor: colors.error,
+  },
+  errorText: { flex: 1, fontSize: 13, color: colors.error, ...fonts.medium },
   header: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     paddingHorizontal: spacing.xl, paddingTop: 60, paddingBottom: spacing.lg,
